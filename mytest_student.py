@@ -17,7 +17,7 @@ from datetime import datetime
 # socketio
 sio = socketio.Server()
 
-from mytrainer import PowerModeAutopilot
+from mytrainer_student import PowerModeAutopilot
 
 
 def preprocess(image):
