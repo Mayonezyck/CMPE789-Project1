@@ -6,6 +6,7 @@ from sklearn.model_selection import train_test_split
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.Functional as F
 import numpy as np
 import matplotlib.image as mpimg
 
@@ -17,13 +18,30 @@ class PowerModeAutopilot(nn.Module):
         super(PowerModeAutopilot, self).__init__()
         #############################################
         #"Your code here"
-        pass
+        # I'm writing out all the arg names in the convolutional portion for mental clarity
+        # Start with three images at the input layer
+        self.conv1 = nn.Conv2d(in_channels=3, out_channels=16, kernel_size=7)
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.conv2 = nn.Conv2d(in_channels=16, out_channels=32, kernel_size=7)
+        # Now for fully connected layers
+        self.fc1 = nn.Linear(32 * 16 * 50, 32)
+        self.fc2 = nn.Linear(32, 16)
+        # Regression so we end with one neuron
+        self.fc3 = nn.Linear(16, 1)
+        
         
         
     def forward(self, x):
         #############################################
         #"Your code here"
-        pass
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = x.view(-1, 32 * 16 * 50)
+        # Now pass through fully connected layers
+        x = self.fc1(x)
+        x = self.fc2(x)
+        x = self.fc3(x)
+        return x
 
 
 class PowerMode_autopilot:
@@ -50,7 +68,25 @@ class PowerMode_autopilot:
         """
         #############################################
         #"Your code here"
-        pass
+        # We only care abt the first four columns
+        col_names = ['center', 'left', 'right', 'steering', 'throttle', 'reverse', 'speed']
+        data_df = pd.read_csv(self.data_path, names=col_names)
+        # Grab those columns
+        image_paths = data_df[['center', 'left', 'right']].values
+        steering_angles = data_df['steering'].values
+
+        # Perform train-val split
+        X_train, X_valid, y_train, y_valid = train_test_split(image_paths, steering_angles, self.test_size, random_state=50)
+
+        # The X values are file paths that need to be turned into images
+        # Starter code's batch function does it for us and converts the data into torch tensors too
+        X_train, y_train = self.batch_generator(X_train, y_train, is_training=True)
+        X_valid, y_valid = self.batch_generator(X_valid, y_valid, is_training=False)
+
+
+        return X_train, X_valid, y_train, y_valid
+
+        
 
     """
     augment image
