@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+
 import os
 import cv2
 import socketio
@@ -13,6 +14,9 @@ from flask import Flask
 from PIL import Image
 from io import BytesIO
 from datetime import datetime
+
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+torch.backends.cudnn.benchmark = True  # optional speedup for fixed input size
 
 # socketio
 sio = socketio.Server()
@@ -63,7 +67,21 @@ def telemetry(sid, data):
 
             # predict the steering angle
             steering_angle = float(model(image).item())
+            # sanitize steering
+            if not np.isfinite(steering_angle):
+                steering_angle = 0.0
+            steering_angle = max(min(steering_angle, 1.0), -1.0)  # clamp to [-1, 1]
 
+            # speed-based throttle with startup boost
+            if speed < 2.0:
+                throttle = 0.35  # push to get rolling
+            else:
+                speed_limit = MIN_SPEED if speed > MAX_SPEED else MAX_SPEED
+                throttle = 1.0 - steering_angle ** 2 - (speed / speed_limit) ** 2
+                throttle = max(min(throttle, 0.8), -0.2)  # gentle caps
+
+            print(f'{steering_angle:.4f} {throttle:.4f} {speed:.2f}')
+            send_control(steering_angle, throttle)
             # Adjust the throttle according to the speed,
             # if greater than the maximum speed to slow down,
             # if less than the minimum speed to increase acceleration

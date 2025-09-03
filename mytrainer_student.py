@@ -362,21 +362,47 @@ class PowerMode_autopilot:
                 print(f"  Saved best model → {best_path} (val {best_val:.5f})")
 
 
+
+def test_model(autopilot, model_path, X_valid, y_valid, num_samples=5):
+    # rebuild the same model architecture
+    model = autopilot.build_model()
+    model.load_state_dict(torch.load(model_path, map_location=autopilot.device))
+    model.eval()
+
+    import random
+    with torch.no_grad():
+        for idx in random.sample(range(len(X_valid)), num_samples):
+            center, left, right = X_valid[idx]
+            img = autopilot.load_image(center)
+            img = autopilot.preprocess(img)
+            img = np.transpose(img, (2, 0, 1))  # HWC -> CHW
+            img = torch.from_numpy(img).unsqueeze(0).float().to(autopilot.device)
+
+            pred = model(img).item()
+            print(f"GT={y_valid[idx]:.3f}, Pred={pred:.3f}")
+
+
 def main():
     
     autopilot = PowerMode_autopilot(data_path='.', learning_rate=1.0e-4, keep_prob=0.5, batch_size=40,
                                     save_best_only=True, test_size=0.2, steps_per_epoch=2000, epochs=3)
 
-    data = autopilot.load_data()
+    # data = autopilot.load_data()
 
+    # model = autopilot.build_model()
+    # print("Device being used:", autopilot.device)
+    # print("CUDA available?", torch.cuda.is_available())
+    # print("CUDA device count:", torch.cuda.device_count())
+    # if torch.cuda.is_available():
+    #     print("GPU name:", torch.cuda.get_device_name(0))
+    # autopilot.train_model(model, *data)
+    X_train, X_valid, y_train, y_valid = autopilot.load_data()
     model = autopilot.build_model()
-    print("Device being used:", autopilot.device)
-    print("CUDA available?", torch.cuda.is_available())
-    print("CUDA device count:", torch.cuda.device_count())
-    if torch.cuda.is_available():
-        print("GPU name:", torch.cuda.get_device_name(0))
-    autopilot.train_model(model, *data)
+    autopilot.train_model(model, X_train, X_valid, y_train, y_valid)
 
+    # Now test using best saved weights
+    print("\nSanity check using best_model.pth")
+    test_model(autopilot, os.path.join('.', "best_model.pth"), X_valid, y_valid, num_samples=5)
 
 if __name__ == '__main__':
     main()
