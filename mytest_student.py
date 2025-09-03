@@ -110,6 +110,7 @@ if __name__ == '__main__':
     # load the model trained with mytrainer.py
     model = PowerModeAutopilot()
     model.load_state_dict(torch.load(model_path))
+    print('loaded ', model_path)
     model.eval()
     image_folder = ''
     # Set image cache directory

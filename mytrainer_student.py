@@ -17,13 +17,32 @@ class PowerModeAutopilot(nn.Module):
         super(PowerModeAutopilot, self).__init__()
         #############################################
         #"Your code here"
-        pass
+
+        # Start with a very simple model
+        # conv feature extractor
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 8, kernel_size=5, stride=2), nn.ReLU(),
+            nn.Conv2d(8, 16, kernel_size=5, stride=2), nn.ReLU()
+        )
+
+        # infer the flattened size automatically
+        with torch.no_grad():
+            dummy = torch.zeros(1, 3, 66, 200)   # (B, C, H, W)
+            out = self.features(dummy)
+            flat_dim = out.view(1, -1).size(1)
+
+        # now build the regressor
+        self.regressor = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(flat_dim, 1)
+        )
         
         
     def forward(self, x):
         #############################################
-        #"Your code here"
-        pass
+        x = self.features(x)
+        x = self.regressor(x)
+        return x
 
 
 class PowerMode_autopilot:
@@ -48,9 +67,19 @@ class PowerMode_autopilot:
         y represents steering value, as reference
         :return: training sets and validation sets of images and steering value (format: X_train, X_valid, y_train, y_valid)
         """
-        #############################################
-        #"Your code here"
-        pass
+        csv_path = os.path.join(self.data_path, 'driving_log.csv')
+        df = pd.read_csv(csv_path, header=None, names=[
+            'center', 'left', 'right', 'steering', 'throttle', 'brake', 'speed'
+        ])
+
+        # Keep only what we need
+        image_paths = df[['center', 'left', 'right']].values
+        steer = df['steering'].astype(float).values
+
+        X_train, X_valid, y_train, y_valid = train_test_split(
+            image_paths, steer, test_size=self.test_size, shuffle=True, random_state=42
+        )
+        return X_train, X_valid, y_train, y_valid
 
     """
     augment image
@@ -218,33 +247,67 @@ class PowerMode_autopilot:
 
     # ... (keep the augmentation and preprocessing functions the same)
 
+    # def batch_generator(self, image_paths, steering_angles, is_training):
+    #     """
+    #     generate a batch of training images and corresponding steering angles
+    #     :param image_paths:
+    #     :param steering_angles:
+    #     :param is_training:
+    #     :return:
+    #     """
+    #     images = np.empty([self.batch_size, self.IMAGE_HEIGHT, self.IMAGE_WIDTH, self.IMAGE_CHANNELS])
+    #     steers = np.empty(self.batch_size)
+    #     while True:
+    #         i = 0
+    #         for index in np.random.permutation(image_paths.shape[0]):
+    #             center, left, right = image_paths[index]
+    #             steering_angle = steering_angles[index]
+    #             if is_training and np.random.rand() < 0.6:
+    #                 image, steering_angle = self.augment(center, left, right, steering_angle)
+    #             else:
+    #                 image = self.load_image(center)
+    #             images[i] = self.preprocess(image)
+    #             steers[i] = steering_angle
+    #             i += 1
+    #             if i == self.batch_size:
+    #                 break
+    #         images = images.transpose((0, 3, 1, 2))
+    #         images = torch.from_numpy(images).float().to(self.device)
+    #         steers = torch.from_numpy(steers).float().unsqueeze(1).to(self.device)
+    #         yield images, steers
+    
     def batch_generator(self, image_paths, steering_angles, is_training):
         """
         generate a batch of training images and corresponding steering angles
-        :param image_paths:
-        :param steering_angles:
-        :param is_training:
-        :return:
         """
-        images = np.empty([self.batch_size, self.IMAGE_HEIGHT, self.IMAGE_WIDTH, self.IMAGE_CHANNELS])
-        steers = np.empty(self.batch_size)
         while True:
+            # (re)create fresh numpy buffers each batch
+            images = np.empty((self.batch_size, self.IMAGE_HEIGHT, self.IMAGE_WIDTH, self.IMAGE_CHANNELS), dtype=np.float32)
+            steers = np.empty((self.batch_size,), dtype=np.float32)
+
             i = 0
             for index in np.random.permutation(image_paths.shape[0]):
                 center, left, right = image_paths[index]
                 steering_angle = steering_angles[index]
+
                 if is_training and np.random.rand() < 0.6:
                     image, steering_angle = self.augment(center, left, right, steering_angle)
                 else:
                     image = self.load_image(center)
+
                 images[i] = self.preprocess(image)
                 steers[i] = steering_angle
                 i += 1
                 if i == self.batch_size:
                     break
-            images = images.transpose((0, 3, 1, 2))
-            images = torch.from_numpy(images).float().to(self.device)
-            steers = torch.from_numpy(steers).float().unsqueeze(1).to(self.device)
+
+            # N H W C -> N C H W
+            images = images.transpose(0, 3, 1, 2)
+
+            # move to torch (stay float32)
+            images = torch.from_numpy(images).to(self.device, non_blocking=True)
+            steers = torch.from_numpy(steers).unsqueeze(1).to(self.device, non_blocking=True)
+
             yield images, steers
 
     def train_model(self, model, X_train, X_valid, y_train, y_valid):
@@ -257,19 +320,61 @@ class PowerMode_autopilot:
         :param y_valid:
         :return:
         """
-        #############################################
-        #"Your code here"
-        pass
+        criterion = nn.MSELoss()
+        optimizer = optim.Adam(model.parameters(), lr=self.learning_rate)
+
+        train_gen = self.batch_generator(X_train, y_train, is_training=True)
+        valid_gen = self.batch_generator(X_valid, y_valid, is_training=False)
+
+        best_val = float("inf")
+        best_path = os.path.join(self.data_path, "best_model.pth")
+        val_steps = max(1, len(X_valid) // self.batch_size)
+
+        for epoch in range(1, self.epochs + 1):
+            # train
+            print('Training')
+            model.train()
+            tr = 0.0
+            for _ in range(self.steps_per_epoch):
+                x, y = next(train_gen)
+                optimizer.zero_grad(set_to_none=True)
+                pred = model(x)
+                loss = criterion(pred, y)
+                loss.backward()
+                optimizer.step()
+                tr += loss.item()
+            train_loss = tr / self.steps_per_epoch
+
+            # validate
+            model.eval()
+            vr = 0.0
+            with torch.no_grad():
+                for _ in range(val_steps):
+                    vx, vy = next(valid_gen)
+                    vr += criterion(model(vx), vy).item()
+            val_loss = vr / val_steps
+
+            print(f"Epoch {epoch}/{self.epochs} | train MSE: {train_loss:.5f} | val MSE: {val_loss:.5f}")
+
+            if val_loss < best_val:
+                best_val = val_loss
+                torch.save(model.state_dict(), best_path)
+                print(f"  Saved best model → {best_path} (val {best_val:.5f})")
 
 
 def main():
-    autopilot = PowerMode_autopilot(data_path='your_model_path', learning_rate=1.0e-4, keep_prob=0.5, batch_size=40,
+    
+    autopilot = PowerMode_autopilot(data_path='.', learning_rate=1.0e-4, keep_prob=0.5, batch_size=40,
                                     save_best_only=True, test_size=0.2, steps_per_epoch=2000, epochs=3)
 
     data = autopilot.load_data()
 
     model = autopilot.build_model()
-
+    print("Device being used:", autopilot.device)
+    print("CUDA available?", torch.cuda.is_available())
+    print("CUDA device count:", torch.cuda.device_count())
+    if torch.cuda.is_available():
+        print("GPU name:", torch.cuda.get_device_name(0))
     autopilot.train_model(model, *data)
 
 
